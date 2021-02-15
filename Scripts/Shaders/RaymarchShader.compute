@@ -1,0 +1,204 @@
+﻿#pragma kernel CSMain
+#include "UnityCG.cginc"
+#include "noiseSimplex.cginc"
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+Texture2D<float4> CamView;
+Texture2D<float4> DepthTex;
+RWTexture2D<float4> Result;
+
+//filaments
+StructuredBuffer<float4> spheres;
+int numSpheres;
+float3 minBoundingBox;
+float3 maxBoundingBox;
+
+float filament_concentration_constant;
+
+int numMarchingSteps; //how many samples to take inside of the sphere along the view ray (TO-DO: maybe change it for a fixed step length?)
+int shadowMarchingSteps; //how many samples to take inside of the sphere along the view ray (TO-DO: maybe change it for a fixed step length?)
+
+//noise settings
+float noiseScale;
+float zCoord;
+
+float3 lightPosition;
+float4 lightColor;
+float absorptivity;
+float scatteringCoefficient;
+float lightThreshold;
+float4 phaseParams;
+
+StructuredBuffer<int> filamentsInSubspace;
+StructuredBuffer<int2> indicesOfSubspaceList;
+int3 numSubdivisions;
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+};
+
+Ray CreateRay(float3 origin, float3 direction) {
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+Ray CreateCameraRay(float2 uv) {
+    float3 origin = mul(_CameraToWorld, float4(0,0,0,1)).xyz;
+    float3 direction = mul(_CameraInverseProjection, float4(uv,0,1)).xyz;
+    direction = mul(_CameraToWorld, float4(direction,0)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin,direction);
+}
+
+// Returns (dstToBox, dstInsideBox). If ray misses box, dstInsideBox will be zero
+float2 rayBoxDst(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 invRaydir) {
+    // Adapted from: http://jcgt.org/published/0007/03/04/
+    float3 t0 = (boundsMin - rayOrigin) * invRaydir;
+    float3 t1 = (boundsMax - rayOrigin) * invRaydir;
+    float3 tmin = min(t0, t1);
+    float3 tmax = max(t0, t1);
+    
+    float dstA = max(max(tmin.x, tmin.y), tmin.z);
+    float dstB = min(tmax.x, min(tmax.y, tmax.z));
+
+    // CASE 1: ray intersects box from outside (0 <= dstA <= dstB)
+    // dstA is dst to nearest intersection, dstB dst to far intersection
+
+    // CASE 2: ray intersects box from inside (dstA < 0 < dstB)
+    // dstA is the dst to intersection behind the ray, dstB is dst to forward intersection
+
+    // CASE 3: ray misses box (dstA > dstB)
+
+    float dstToBox = max(0, dstA);
+    float dstInsideBox = max(0, dstB - dstToBox);
+    return float2(dstToBox, dstInsideBox);
+}
+
+// Henyey-Greenstein
+float hg(float a, float g) {
+    float g2 = g*g;
+    return (1-g2) / (4*3.1415*pow(1+g2-2*g*(a), 1.5));
+}
+
+float phase(float a) {
+    float blend = .5;
+    float hgBlend = hg(a,phaseParams.x) * (1-blend) + hg(a,-phaseParams.y) * blend;
+    return phaseParams.z + hgBlend*phaseParams.w;
+}
+
+float SphereDistance(float3 p, float4 sphere) {
+    return length(sphere.xyz-p)-sphere.w;
+}
+
+float concentrationFromFilament(float3 pos, float4 filament){
+    //Farrell's Equation
+    //calculate how much gas concentration does one filament contribute to the queried location
+    float sigma = filament.w/5 *100;
+    float distance_cm = length(pos-filament.xyz) * 100;
+
+    return (filament_concentration_constant / (sigma * sigma * sigma) ) * exp( -(distance_cm * distance_cm)/(2*(sigma * sigma)) );
+}
+
+float noiseAtPoint(float3 pEvaluate){
+    return snoise(float4(pEvaluate.x, pEvaluate.y, pEvaluate.z, zCoord)*noiseScale) + 1;
+}
+
+float concentrationAtPoint(float3 pointE){
+    float accumulator=0;
+    int3 cellindex= int3(
+        (pointE.x-minBoundingBox.x)/((maxBoundingBox.x-minBoundingBox.x)/numSubdivisions.x),
+        (pointE.y-minBoundingBox.y)/((maxBoundingBox.y-minBoundingBox.y)/numSubdivisions.y),
+        (pointE.z-minBoundingBox.z)/((maxBoundingBox.z-minBoundingBox.z)/numSubdivisions.z)
+    );
+    int k = cellindex.z * (numSubdivisions.x*numSubdivisions.y) +cellindex.y * numSubdivisions.x + cellindex.x;
+
+    int2 listIndices = indicesOfSubspaceList[k];
+    while(listIndices.x<listIndices.y){
+        accumulator+=concentrationFromFilament(pointE, spheres[filamentsInSubspace[listIndices.x]]);
+        listIndices.x++;
+    }
+    return accumulator;
+}
+
+float lightMarch(Ray ray){
+
+    float2 LightDistance = rayBoxDst(minBoundingBox, maxBoundingBox, ray.origin, 1/ray.direction);
+
+    float accumulator=0;
+    float3 p1 = ray.origin;
+    float3 p2 = ray.origin + LightDistance.y*ray.direction;
+
+    float3 pEvaluate = p1;
+        
+    float3 stepVector = (p2-p1)/shadowMarchingSteps;
+    for(int i = 0; i< shadowMarchingSteps; i++){
+        if (accumulator>lightThreshold)
+            break;
+        accumulator+= concentrationAtPoint(pEvaluate);//* noiseAtPoint(pEvaluate);
+        pEvaluate=pEvaluate+stepVector; 
+    }
+    accumulator*= 50*length(stepVector); //*100 to turn distance into cm, *0.5 to approximate the effect of the noise
+    return accumulator;
+}
+
+[numthreads(16,16,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    //the code for creating and orienting the ray has been shamelessly lifted from Sebastian Lague's Raymarching project
+    uint width,height;
+    Result.GetDimensions(width, height);
+    float2 uv = id.xy / float2(width,height) * 2 - 1;
+    
+    Ray ray = CreateCameraRay(uv);
+    
+    float2 boundingBoxDistance = rayBoxDst(minBoundingBox, maxBoundingBox, ray.origin, 1/ray.direction);
+    
+    if(boundingBoxDistance.y>0){
+
+        float depth = LinearEyeDepth(DepthTex[id.xy].r); //distance from the camera to the objects in the scene
+        
+        //start and end of the raymarch, determined by the intersection with the bounding box and any scene objects that block the view
+        float3 p1=ray.origin + min(depth,boundingBoxDistance.x)*ray.direction;
+        float3 p2=ray.origin + min(depth, boundingBoxDistance.x+boundingBoxDistance.y)*ray.direction;
+
+        // Phase function makes clouds brighter around sun
+        float cosAngle = dot(ray.direction, _WorldSpaceLightPos0.xyz);
+        float phaseVal = phase(cosAngle);
+
+        float transmittance = 1;
+        float totalLight = 0;
+
+        float3 pEvaluate = p1;            
+        float3 stepVector = (p2-p1)/numMarchingSteps;
+        float length_cm = 100*length(stepVector);
+
+        float attenuation = scatteringCoefficient + absorptivity;
+        for (int i = 0 ; i<numMarchingSteps; i++){
+            if(transmittance<0.01)
+                break;
+            float density = concentrationAtPoint(pEvaluate);
+
+            if (density>0){
+                density = density * noiseAtPoint(pEvaluate) * length_cm;
+                Ray lightRay = CreateRay(pEvaluate, normalize(lightPosition-pEvaluate));
+                
+                float light = lightMarch(lightRay);
+                totalLight+=(exp(-light*attenuation)+0.1) *density*transmittance*scatteringCoefficient;
+                
+                transmittance *=exp(-density*attenuation);
+            }
+            
+            pEvaluate+=stepVector;
+        }
+
+        Result[id.xy] = CamView[id.xy]* transmittance + (lightColor * min(1,totalLight* phaseVal) );
+    }
+    else{
+        Result[id.xy] = CamView[id.xy];
+    }
+}
