@@ -26,10 +26,19 @@ public class GADEN_player:MonoBehaviour{
         g.particleSystem=particleSystem;
     }
 
-    public float getConcentration(Vector3 position){
-        return g.getConcentration(position);
+    public GasMeasurement getConcentration(Vector3 position){
+        return new GasMeasurement(g.gasType, g.getConcentration(position));
     }
     public Vector3 getWind(Vector3 position){
         return g.getWind(position);
+    }
+}
+
+public struct GasMeasurement{
+    public string gas_type;
+    public float ppm;
+    public GasMeasurement(string gt, float p){
+        gas_type=gt;
+        ppm=p;
     }
 }
