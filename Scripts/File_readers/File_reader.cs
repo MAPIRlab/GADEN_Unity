@@ -22,7 +22,7 @@ public abstract class File_reader : MonoBehaviour
     protected float envmin_x, envmin_y, envmin_z; //environment min coordinates
     protected float envmax_x, envmax_y, envmax_z; //environment max coordinates
     protected float cell_size;
-    protected string gasType;
+    public string gasType;
 
     /*  visualization   */
     new public ParticleSystem particleSystem;  

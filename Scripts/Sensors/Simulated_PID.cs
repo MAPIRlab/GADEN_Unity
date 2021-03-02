@@ -11,8 +11,8 @@ public class Simulated_PID : MonoBehaviour
     public float getMeasurement(Vector3 request){
 
         
-        //get the ground-truth wind value from the gaden_player script
-        float response=gadenPlayer.GetComponent<GADEN_player>().getConcentration(request);
+        //get the ground-truth value from the gaden_player script
+        GasMeasurement response=gadenPlayer.GetComponent<GADEN_player>().getConcentration(request);
 
         //corrupt the value with gaussian noise
         float u1 = 1.0f-(float)rand.NextDouble(); //uniform(0,1] random doubles
@@ -21,7 +21,7 @@ public class Simulated_PID : MonoBehaviour
                     Mathf.Sin(2.0f * Mathf.PI * u2); //random normal(0,1)
         float randNormal = stdDev * randStdNormal; //random normal(mean,stdDev^2)
         
-        return response+randNormal;
+        return response.ppm+randNormal;
     }
 
     void Update(){
