@@ -15,10 +15,11 @@ public abstract class File_reader : MonoBehaviour
     public string filePath; 
     public string occupancyFile;
     protected int currentIteration;
-    protected int[][][] env; //occupancy grid
-    protected float[][][] wind_u; //wind vector first component
-    protected float[][][] wind_v; //wind vector second component
-    protected float[][][] wind_w; //wind vector third component
+    protected int[] env; //occupancy grid
+    protected double[] wind_u; //wind vector first component
+    protected double[] wind_v; //wind vector second component
+    protected double[] wind_w; //wind vector third component
+    protected Vector3Int environment_cells;
     protected float envmin_x, envmin_y, envmin_z; //environment min coordinates
     protected float envmax_x, envmax_y, envmax_z; //environment max coordinates
     protected float cell_size;
@@ -33,7 +34,19 @@ public abstract class File_reader : MonoBehaviour
     protected ParticleSystem.Particle particleTemplate;
 
 
-    protected bool readFilaments; //reading concentration files or filament files? see parameter "writeConcentrations" in GADEN
+
+    protected string[] GasTypesByCode = {
+        "ethanol",
+		"methane",
+		"hydrogen",
+		"propanol",
+		"chlorine",
+		"flurorine",
+		"acetone",
+		"neon",
+		"helium",
+		"hot_air"
+    };
 
 
     //Important note: every file that comes from GADEN has Z-UP. Unity has Y-UP.
@@ -48,27 +61,12 @@ public abstract class File_reader : MonoBehaviour
 
         currentIteration=0;
         //read the parameters of the environment, gas type, occupancy of cells...
-        Vector3Int size = checkSize(filePath+0);
-        initEnv(occupancyFile, size);
+        checkSize(filePath+"/iteration_0");
+        initEnv(occupancyFile);
 
-        //Initializing jagged arrays is awful, but they are faster than multidimensional ones
-        wind_u = new float[size.x][][];
-        wind_v = new float[size.x][][];
-        wind_w = new float[size.x][][];
-
-        for(int i=0; i<size.x;i++){
-            wind_u[i] = new float[size.y][];
-            wind_v[i] = new float[size.y][];
-            wind_w[i] = new float[size.y][];
-        }
-
-        for(int i=0; i<size.x;i++){
-            for(int j=0; j<size.y;j++){
-                wind_u[i][j] = new float[size.z];
-                wind_v[i][j] = new float[size.z];
-                wind_w[i][j] = new float[size.z];
-            }    
-        }
+        wind_u = new double[environment_cells.x*environment_cells.y*environment_cells.z];
+        wind_v = new double[environment_cells.x*environment_cells.y*environment_cells.z];
+        wind_w = new double[environment_cells.x*environment_cells.y*environment_cells.z];
 
         //okay, that's done, let's go!
 
@@ -95,81 +93,39 @@ public abstract class File_reader : MonoBehaviour
         int i=(int)((position.x-envmin_x)/cell_size);
         int j=(int)((position.y-envmin_y)/cell_size);
         int k=(int)((position.z-envmin_z)/cell_size);
-        return new Vector3(wind_u[i][j][k], wind_v[i][j][k], wind_w[i][j][k]);
+        return new Vector3((float) wind_u[indexFrom3D(i,j,k)], (float) wind_v[indexFrom3D(i,j,k)], (float) wind_w[indexFrom3D(i,j,k)]);
     }
 
     protected abstract IEnumerator readLogFile(int framerate);
 
     protected abstract void showGas();
 
-    protected Vector3Int checkSize(string file)
-    {
-        //we are going to read just the header here
+    protected abstract void checkSize(string file);
 
-        string text = decompress(file);
-        string[] lines;
+    public static MemoryStream decompress(string filename){
+        var output = new MemoryStream();
+        using(FileStream filestream = new FileStream(filename,FileMode.Open)){
+            //we have to discard the first two bytes because the file is compressed with zlib, not just deflate
+            filestream.ReadByte();
+            filestream.ReadByte();
 
-        var delim=new char[]{'\n'};
-        lines=text.Split(delim, StringSplitOptions.RemoveEmptyEntries);
-        string line;
-        string[] words;
-        //minimum coordinates of the environment
-        line = lines[0];
-        words = line.Split(' ');
-        envmin_x=float.Parse(words[1],NumberStyles.Any, CultureInfo.InvariantCulture);
-        envmin_z=float.Parse(words[2],NumberStyles.Any, CultureInfo.InvariantCulture);
-        envmin_y=float.Parse(words[3],NumberStyles.Any, CultureInfo.InvariantCulture);
-
-        //minimum coordinates of the environment
-        line = lines[1];
-        words = line.Split(' ');
-        envmax_x=float.Parse(words[1],NumberStyles.Any, CultureInfo.InvariantCulture);
-        envmax_z=float.Parse(words[2],NumberStyles.Any, CultureInfo.InvariantCulture);
-        envmax_y=float.Parse(words[3],NumberStyles.Any, CultureInfo.InvariantCulture);
-
-        //number of cells
-        line = lines[2];
-        words = line.Split(' ');
-        Vector3Int size = new Vector3Int(Int32.Parse(words[1]), Int32.Parse(words[3]), Int32.Parse(words[2]));
-
-        //cell size
-        line = lines[3];
-        words = line.Split(' ');
-        cell_size=float.Parse(words[1],NumberStyles.Any, CultureInfo.InvariantCulture);
-
-        //gas type
-        line = lines[5];
-        words = line.Split(' ');
-        gasType=words[1];
-
-        //filament centers or concentration in each cell?
-        readFilaments=lines[7]=="Filaments";
-
-        return size;
-    }
-
-    public static string decompress(string filename){
-        string result;
-        using (var output = new MemoryStream()){
-            using(FileStream filestream = new FileStream(filename,FileMode.Open)){
-                //we have to discard the first two bytes because the file is compressed with zlib, not just deflate
-                filestream.ReadByte();
-                filestream.ReadByte();
-
-                using(DeflateStream decompressionStream = new DeflateStream(filestream, CompressionMode.Decompress)){
-                    decompressionStream.CopyTo(output);
-                }
-                output.Position = 0;
+            using(DeflateStream decompressionStream = new DeflateStream(filestream, CompressionMode.Decompress)){
+                decompressionStream.CopyTo(output);
             }
-            StreamReader reader = new StreamReader(output);
-            result = reader.ReadToEnd();
-            reader.Close();
+            output.Position = 0;
         }
-        
-        return result;
+        return output;
     }
 
-    protected void initEnv(string filename, Vector3Int size){
+    public string readFromStream(MemoryStream ms){
+        StreamReader reader = new StreamReader(ms);
+        string text = reader.ReadToEnd();
+        reader.Close();
+        ms.Close();
+        return text;
+    }
+
+    protected void initEnv(string filename){
         FileStream filestream = new FileStream(filename,FileMode.Open);
         StreamReader reader = new StreamReader(filestream);
         var result = reader.ReadToEnd();
@@ -177,17 +133,7 @@ public abstract class File_reader : MonoBehaviour
         var delim=new char[]{'\n'};
         string[] lines=result.Split(delim, StringSplitOptions.RemoveEmptyEntries);
 
-        env = new int[size.x][][];
-
-        for(int i=0; i<env.Length;i++){
-            env[i] = new int[size.y][];
-        }
-
-        for(int i=0; i<env.Length;i++){
-            for(int j=0; j<env[0].Length;j++){
-                env[i][j] = new int[size.z];
-            }    
-        }
+        env = new int[environment_cells.x* environment_cells.y*environment_cells.z];
 
         int x=0, y=0, z=0;
         for(int i =4; i<lines.Length;i++){
@@ -197,8 +143,8 @@ public abstract class File_reader : MonoBehaviour
                 y=0;
             }else{
                 int j=0;
-                while(y<size.z){
-                    env[x][z][y]=lines[i][j];
+                while(y<environment_cells.z){
+                    env[indexFrom3D(x,z,y)]=lines[i][j];
                     j+=2;
                     y++;
                 }
@@ -208,4 +154,8 @@ public abstract class File_reader : MonoBehaviour
             
         }
     }
+
+    protected int indexFrom3D(int x, int y, int z){
+        return x + y*environment_cells.x + z*environment_cells.x*environment_cells.y;
+    } 
 }

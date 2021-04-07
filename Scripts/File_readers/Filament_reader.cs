@@ -38,161 +38,33 @@ public class Filament_reader: File_reader
             while(updated){
                 yield return null;
             }
-            if(File.Exists(filePath+currentIteration)){
+            if(File.Exists(filePath+"/iteration_"+currentIteration)){
                 
-                //this format is slightly less intuitive, but its MUCH more efficient in all aspects
-                //we don't have the same information (concentration + wind per cell) in each file
-                //instead, we have the locations and stdev of the filaments (concentrations will be computed on-demand later)
-                //but none of this makes sense if we still have the wind information everywhere, it would still be slow
-                //so, there is only wind information is _some_ files. If it has not changed since the last snapshot (steady state), it's just not included
+                var stream = decompress(filePath+"/iteration_"+currentIteration);
+                BinaryReader br = new BinaryReader(stream);
+                br.BaseStream.Seek(5*sizeof(int) + 14*sizeof(double), SeekOrigin.Begin); //skip headers
 
-                string text = decompress(filePath+currentIteration);
-                var delim=new char[]{'\n'};
-                string[] lines=text.Split(delim, StringSplitOptions.RemoveEmptyEntries);
-
-                string[] lineEight=lines[8].Split(); //line eight is special, you see. It contains constants!
-                total_moles_in_filament = float.Parse(lineEight[0],NumberStyles.Any, CultureInfo.InvariantCulture);
-                num_moles_all_gases_in_cm3 = float.Parse(lineEight[1],NumberStyles.Any, CultureInfo.InvariantCulture);
-
-                //the line in which the filament information starts
-                int endW = 8;
-
-                //if there is wind info
-                if(lines[9]=="Wind"){
-
-                    endW=lines.Length-1;
-                    while(lines[endW]!="EndWind"){
-                        endW--;
-                    }
-                    
-                    int offset = 10; //lines we have already skipped
-                    //same as the other version
-                    for(int index = 0;index<framerate;index++){
-                        Parallel.For(offset+index*(endW/framerate), (index+1)*endW/framerate, i =>{
-                            string line=lines[i];
-                            int x=0,y=0,z=0;
-                            int u=0,v=0,w=0;
-                            int j=0;
-                            bool negative = false;
-
-                            while(line[j]!=' '){
-                                x=x*10+(line[j]-'0');
-                                j++;
-                            }
-                            j++;
-
-                            while(line[j]!=' '){
-                                y=y*10+(line[j]-'0');
-                                j++;
-                            }
-                            j++;
-                            while(line[j]!=' '){
-                                z=z*10+(line[j]-'0');
-                                j++;
-                            }
-                            j++;
-                            
-                            if(line[j]=='-'){
-                                negative=true;
-                                j++;
-                            }
-                            while(line[j]!=' '){
-                                u=u*10+(line[j]-'0');
-                                j++;
-                            }
-                            j++;
-                            u=negative?-u:u;
-                            negative=false;
-
-                            if(line[j]=='-'){
-                                negative=true;
-                                j++;
-                            }
-                            while(line[j]!=' '){
-                                v=v*10+(line[j]-'0');
-                                j++;
-                            }
-                            j++;
-                            v=negative?-v:v;
-                            negative=false;
-
-                            if(line[j]=='-'){
-                                negative=true;
-                                j++;
-                            }
-                            while(j<line.Length){
-                                w=w*10+(line[j]-'0');
-                                j++;
-                            }
-                            w=negative?-w:w;
-
-                            wind_u[x][z][y]=u/1000f;
-                            wind_v[x][z][y]=w/1000f;
-                            wind_w[x][z][y]=v/1000f;
-
-                        });
-                        offset=0;
-                        yield return null;
-                    }
-                }
-
+                int wind_index;
+                wind_index=br.ReadInt32();
+                readWindFiles(wind_index);
+                
                 //now we read the filaments
                 filaments=filaments_next_step;
-                filaments_next_step = new Dictionary<int, Vector4>();
-                for(int i = endW+1; i<lines.Length; i++){
-                    string line=lines[i];
-                    int index=0, x=0,y=0,z=0,stdv=0;
-                    int j=0;
-                    bool negative = false;
-
-                    while(line[j]!=' '){
-                        index=index*10+(line[j]-'0');
-                        j++;
-                    }
-                    j++;
-
-                    if(line[j]=='-'){
-                        negative=true;
-                        j++;
-                    }
-                    while(line[j]!=' '){
-                        x=x*10+(line[j]-'0');
-                        j++;
-                    }
-                    j++;
-                    x=negative?-x:x;
-                    negative=false;
-
-                    if(line[j]=='-'){
-                        negative=true;
-                        j++;
-                    }
-                    while(line[j]!=' '){
-                        y=y*10+(line[j]-'0');
-                        j++;
-                    }
-                    j++;
-                    y=negative?-y:y;
-                    negative=false;
-
-                    if(line[j]=='-'){
-                        negative=true;
-                        j++;
-                    }
-                    while(line[j]!=' '){
-                        z=z*10+(line[j]-'0');
-                        j++;
-                    }
-                    j++;
-                    z=negative?-z:z;
-                   
-                    while(j<line.Length){
-                        stdv=stdv*10+(line[j]-'0');
-                        j++;
-                    }
-                    filaments_next_step.Add(index,new Vector4(x/1000f, z/1000f,y/1000f, stdv/1000f));
+                filaments_next_step=new Dictionary<int, Vector4>();
+                while(br.BaseStream.Position != br.BaseStream.Length){
+                    int filament_index;
+                    filament_index=br.ReadInt32();
+                    Vector4 filament= new Vector4();
+                    filament.x=(float) br.ReadDouble();
+                    filament.z=(float) br.ReadDouble();
+                    filament.y=(float) br.ReadDouble();
+                    filament.w=(float) br.ReadDouble();
+                    
+                    filaments_next_step.Add(filament_index, filament);
                 }
                 
+                stream.Close();
+                br.Close();
                 currentIteration++;
                 updated=true;
                 yield return null;
@@ -205,6 +77,21 @@ public class Filament_reader: File_reader
                 yield return null;
             }
         }
+    }
+
+    void readWindFiles(int wind_index){
+        FileStream filestream = new FileStream(filePath+"/wind/wind_iteration_"+wind_index,FileMode.Open);
+        BinaryReader br = new BinaryReader(filestream);
+        
+        byte[] buffer = br.ReadBytes(wind_u.Length* sizeof(double));
+        Buffer.BlockCopy(buffer,0,wind_u,0,buffer.Length);
+        br.ReadBytes(wind_v.Length* sizeof(double));
+        Buffer.BlockCopy(buffer,0,wind_v,0,buffer.Length);
+        br.ReadBytes(wind_w.Length* sizeof(double));
+        Buffer.BlockCopy(buffer,0,wind_w,0,buffer.Length);
+
+        filestream.Close();
+        br.Close();
     }
 
     protected override void showGas()
@@ -296,7 +183,7 @@ public class Filament_reader: File_reader
 
 
             // Check if the cell is occupied
-            if(env[x_idx][y_idx][z_idx] != 0) { return false; }
+            if(env[indexFrom3D(x_idx,y_idx,z_idx)] != 0) { return false; }
         }
         return true;
     }
@@ -321,4 +208,34 @@ public class Filament_reader: File_reader
         return (float) Math.Sqrt(-2*Math.Pow(sigma,2) * Math.Log(logTerm)) / 100;
 
     }
+
+    protected override void checkSize(string file){
+        var stream = decompress(file);
+        BinaryReader br = new BinaryReader(stream);
+        br.ReadInt32();
+        envmin_x=(float) br.ReadDouble();
+        envmin_z=(float) br.ReadDouble();
+        envmin_y=(float) br.ReadDouble();
+
+        envmax_x=(float) br.ReadDouble();
+        envmax_z=(float) br.ReadDouble();
+        envmax_y=(float) br.ReadDouble();
+
+        Vector3Int size = new Vector3Int(br.ReadInt32(),br.ReadInt32(),br.ReadInt32());
+        environment_cells= new Vector3Int(size.x, size.z, size.y);
+
+        cell_size=(float) br.ReadDouble();
+        br.ReadDouble();
+        br.ReadDouble();
+        br.ReadDouble();
+        br.ReadDouble();
+        br.ReadDouble();
+
+        gasType= GasTypesByCode[br.ReadInt32()];
+
+        total_moles_in_filament = (float) br.ReadDouble();
+        num_moles_all_gases_in_cm3 = (float) br.ReadDouble();
+        stream.Close();
+        br.Close();
+    } 
 }

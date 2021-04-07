@@ -1,5 +1,6 @@
 using UnityEngine;
 using System;
+using System.IO;
 
 public class GADEN_player:MonoBehaviour{
     public float visibleConcentrationThreshold; //concentration, in ppm, above which gas should be visible
@@ -9,16 +10,17 @@ public class GADEN_player:MonoBehaviour{
     File_reader g;
     new public ParticleSystem particleSystem;  
     void Start(){
-        string text = File_reader.decompress(filePath+0);
-        string[] lines;
-
-        var delim=new char[]{'\n'};
-        lines=text.Split(delim, StringSplitOptions.RemoveEmptyEntries);
-        if(lines[7]=="Filaments"){
+        var stream = File_reader.decompress(filePath+"/iteration_0");
+        BinaryReader br = new BinaryReader(stream);
+        
+        if(br.ReadInt32()==1){
             g = (Filament_reader)gameObject.AddComponent(typeof(Filament_reader));
         }else{
             g = (Concentration_reader)gameObject.AddComponent(typeof(Concentration_reader));
         }
+        br.Close();
+        stream.Close();
+
         g.filePath=filePath;
         g.visibleConcentrationThreshold=visibleConcentrationThreshold;
         g.occupancyFile=occupancyFile;
