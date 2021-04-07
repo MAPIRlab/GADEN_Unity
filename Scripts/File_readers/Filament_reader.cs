@@ -13,6 +13,7 @@ public class Filament_reader: File_reader
     Dictionary<int,Vector4> filaments = new Dictionary<int,Vector4>(); //location + stdev of each existing filament
     Dictionary<int,Vector4> filaments_next_step = new Dictionary<int,Vector4>(); //for smooth visualization
     Dictionary<int,int> filamentToParticle = new Dictionary<int, int>();
+    int last_wind_index = -1;
 
     float total_moles_in_filament;
     float num_moles_all_gases_in_cm3;
@@ -80,6 +81,9 @@ public class Filament_reader: File_reader
     }
 
     void readWindFiles(int wind_index){
+        if(wind_index==last_wind_index)
+            return;
+        last_wind_index=wind_index;
         FileStream filestream = new FileStream(filePath+"/wind/wind_iteration_"+wind_index,FileMode.Open);
         BinaryReader br = new BinaryReader(filestream);
         

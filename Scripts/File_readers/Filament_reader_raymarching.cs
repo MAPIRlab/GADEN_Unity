@@ -16,7 +16,7 @@ public class Filament_reader_raymarching: File_reader
     //constants to calculate concentrations
     float total_moles_in_filament;
     float num_moles_all_gases_in_cm3;
-
+    int last_wind_index = -1;
     public ComputeShader shader;
     public float noiseScale;
     float zCoord;
@@ -118,6 +118,9 @@ public class Filament_reader_raymarching: File_reader
 
     
     void readWindFiles(int wind_index){
+        if(wind_index==last_wind_index)
+            return;
+        last_wind_index=wind_index;
         FileStream filestream = new FileStream(filePath+"/wind/wind_iteration_"+wind_index,FileMode.Open);
         BinaryReader br = new BinaryReader(filestream);
         
