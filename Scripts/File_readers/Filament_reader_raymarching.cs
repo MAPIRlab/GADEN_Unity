@@ -393,9 +393,12 @@ public class Filament_reader_raymarching: File_reader
     } 
 
     void OnDestroy(){
-        spheres.Release();
-        indicesOfSubspaceList.Release();
-        filamentsInSubspace.Release();
+        if(spheres!=null)
+            spheres.Release();
+        if(indicesOfSubspaceList!=null)
+            indicesOfSubspaceList.Release();
+        if(filamentsInSubspace!=null)
+            filamentsInSubspace.Release();
     }
 
 }

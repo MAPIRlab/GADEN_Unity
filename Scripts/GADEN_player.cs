@@ -1,14 +1,22 @@
 using UnityEngine;
-using System;
+using UnityEditor;
 using System.IO;
 
 public class GADEN_player:MonoBehaviour{
     public float visibleConcentrationThreshold; //concentration, in ppm, above which gas should be visible
     public string filePath; //path to gas simulation logs, minus the iteration counter 
-    public string occupancyFile; //OccupancyGrid3D.csv
+    public string occupancyFile;
     public float updateInterval; //minimum time before moving to next iteration
     File_reader g;
     new public ParticleSystem particleSystem;  
+
+    public void SelectOccupancyFile(){
+        occupancyFile = EditorUtility.OpenFilePanel("Select the Occupancy file", "", "csv"); //OccupancyGrid3D.csv
+    }
+    public void SelectFolder(){
+        filePath = EditorUtility.OpenFolderPanel("Select the simulation folder", "", filePath); //OccupancyGrid3D.csv
+    }
+
     void Start(){
         var stream = File_reader.decompress(filePath+"/iteration_0");
         BinaryReader br = new BinaryReader(stream);
